@@ -1,7 +1,11 @@
 name = "garmin-ebike-fixer"
 type = "javascript"
 
-account_id = ""
+account_id = "4e4246a532504a83a59c052aae5645fa"
 workers_dev = true
 route = ""
 zone_id = ""
+
+kv_namespaces = [ 
+	 { binding = "STRAVA_OAUTH", id = "a36feb1caf1045579659649a3cce8a3c" }
+]
