@@ -9,13 +9,32 @@ addEventListener('fetch', (event) => {
 // environment variables
 const clientId = STRAVA_CLIENT_ID
 const clientSecret = STRAVA_CLIENT_SECRET
-const REDIRECT_URI = "https://garmin-ebike-fixer.catjunior.workers.dev/oauth_redirect"
+const REDIRECT_URI =
+  'https://garmin-ebike-fixer.catjunior.workers.dev/oauth_redirect'
 // const accessToken = STRAVA_ACCESS_TOKEN // Short lived, pulled from the web UI. Only has basic read scope
 
+/**
+ *
+ * @returns {Response} 404 Response
+ */
 function handleNotFound() {
   return new Response(null, {
     status: 404,
   })
+}
+
+/**
+ *
+ * @param {string} timestamp - Timestamp that can be read into a Date
+ * @returns {boolean} Is the time before 10:00AM in Central time
+ */
+function isCommuteTime(timestamp) {
+  const centralTimeString = new Date(timestamp).toLocaleString('en-US', {
+    timeZone: 'America/Chicago',
+  })
+  const hours = new Date(centralTimeString).getHours()
+
+  return hours < 10
 }
 
 /**
@@ -25,18 +44,18 @@ function handleNotFound() {
  */
 function handleLogin() {
   const stravaOauthLink = new URL(`https://www.strava.com/oauth/authorize`)
-  
-  stravaOauthLink.searchParams.set("client_id", STRAVA_CLIENT_ID)
-  stravaOauthLink.searchParams.set("redirect_uri", REDIRECT_URI)
-  stravaOauthLink.searchParams.set("response_type", "code")
-  stravaOauthLink.searchParams.set("scope", "activity:read_all,activity:write")
+
+  stravaOauthLink.searchParams.set('client_id', STRAVA_CLIENT_ID)
+  stravaOauthLink.searchParams.set('redirect_uri', REDIRECT_URI)
+  stravaOauthLink.searchParams.set('response_type', 'code')
+  stravaOauthLink.searchParams.set('scope', 'activity:read_all,activity:write')
 
   const html = `<a href="${stravaOauthLink.toString()}">CLICK HERE</a>`
 
   return new Response(html, {
     headers: {
-      "Content-Type": "text/html; charset=UTF-8"
-    }
+      'Content-Type': 'text/html; charset=UTF-8',
+    },
   })
 }
 
@@ -71,12 +90,15 @@ required string, in query	The grant type for the request. For initial authentica
     client_id: STRAVA_CLIENT_ID,
     client_secret: STRAVA_CLIENT_SECRET,
     code: authorizationCode,
-    grant_type: "authorization_code"
+    grant_type: 'authorization_code',
   })
   const tokenObject = await getAccessTokenAndSaveIntoCache(authParams)
 
   // Return a response that it worked
-  return new Response("Hey, we got your access token and saved it into Key / Value storage, it looks ilke this " + JSON.stringify(tokenObject))
+  return new Response(
+    'Hey, we got your access token and saved it into Key / Value storage, it looks ilke this ' +
+      JSON.stringify(tokenObject),
+  )
 }
 
 /**
@@ -86,6 +108,8 @@ required string, in query	The grant type for the request. For initial authentica
  * @returns {Response}
  */
 async function handleStravaUpdateWebhook(request) {
+  // TODO: Handle strava's webhook validation request: https://developers.strava.com/docs/webhooks/
+
   // Get activity ID from webhook request
   const {
     aspect_type,
@@ -101,7 +125,7 @@ async function handleStravaUpdateWebhook(request) {
 
   // Get whole activity
   const activityBody = await fetch(
-    `https://www.strava.com/api/v3/activities/${object_id}?include_all_efforts=false`,
+    `https://www.strava.com/api/v3/activities/${object_id}`,
     {
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -110,33 +134,88 @@ async function handleStravaUpdateWebhook(request) {
   )
   const activityContents = await activityBody.json()
 
-  // Check if the activity is uploaded from the watch and is a weekday morning
+  // Check if the activity is uploaded from the watch and is a morning before 10:00AM central time
+  const { device_name, start_date, description } = activityContents
 
+  if (
+    aspect_type == 'create' &&
+    device_name == 'Garmin Instinct Solar' &&
+    isCommuteTime(start_date)
+  ) {
+    // Update activity to set type ebike, commute, and set bicycle to the radwagon
+    const updatedActivity = {
+      type: 'EBikeRide',
+      commute: true,
+      description: 'Morning commute',
+      gear_id: 'b8174850',
+    }
 
-  // Update activity to set type ebike, commute, and set bicycle to the radwagon
+    const updateResponse = await fetch(
+      `https://www.strava.com/api/v3/activities/${object_id}`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        method: 'PUT',
+        body: JSON.stringify(updatedActivity),
+      },
+    )
+  }
 
   // For testing
-  return new Response(JSON.stringify(activityContents), {
-    headers: { 'content-type': 'application/json' },
-  })
+  return new Response()
 }
 
 /**
+ * Sets up a subscription so that Strava will call this worker whenever a ride is uploaded.
+ *
+ * @param {Request} request
+ */
+async function registerWebhookHandler(request) {}
+
+/**
  * /strava/athlete
- * 
+ *
  * Can't leave this one open, it will be vulnerable to breaking strava API limits
- * 
- * @param {Request} request 
+ *
+ * @param {Request} request
  */
 async function handleStravaAthleteRequest(request) {
-  const athleteId = new URL(request.url).searchParams.get("athleteId")
+  const athleteId = new URL(request.url).searchParams.get('athleteId')
   const accessToken = await getAccessTokenForAthlete(athleteId)
 
-  const athleteResponse = await fetch("https://www.strava.com/api/v3/athlete", {
+  const athleteResponse = await fetch('https://www.strava.com/api/v3/athlete', {
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
   })
+  // const athlete = await athleteResponse.json()
+
+  return athleteResponse
+}
+
+/**
+ * /strava/activity
+ *
+ * Can't leave this one open, it will be vulnerable to breaking strava API limits
+ *
+ * @param {Request} request
+ */
+async function handleStravaActivityRequest(request) {
+  const requestUrl = new URL(request.url)
+  const athleteId = requestUrl.searchParams.get('athleteId')
+  const id = requestUrl.searchParams.get('activityId')
+  const accessToken = await getAccessTokenForAthlete(athleteId)
+
+  const athleteResponse = await fetch(
+    `https://www.strava.com/api/v3/activities/${id}`,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+  )
   // const athlete = await athleteResponse.json()
 
   return athleteResponse
@@ -150,11 +229,9 @@ async function handleStravaAthleteRequest(request) {
  */
 async function getAccessTokenForAthlete(athleteId) {
   // Lookup payload from K/V store
-  const {
-    expires_at,
-    access_token,
-    refresh_token
-  } = JSON.parse(await STRAVA_OAUTH.get(`athletes/${athleteId}`))
+  const { expires_at, access_token, refresh_token } = JSON.parse(
+    await STRAVA_OAUTH.get(`athletes/${athleteId}`),
+  )
   // Check if it will expire soon, return token if valid
   const soon = Math.floor(Date.now() / 1000) + 60 // Next minute
   if (expires_at > soon) {
@@ -166,7 +243,7 @@ async function getAccessTokenForAthlete(athleteId) {
     client_id: STRAVA_CLIENT_ID,
     client_secret: STRAVA_CLIENT_SECRET,
     refresh_token: refresh_token,
-    grant_type: "refresh_token"
+    grant_type: 'refresh_token',
   })
 
   const tokenInfo = await getAccessTokenAndSaveIntoCache(authParams, athleteId)
@@ -177,16 +254,19 @@ async function getAccessTokenForAthlete(athleteId) {
 /**
  * Makes a request to get an access token and refresh token, and saves it into cache for the future.
  * Returns back the token information
- * 
- * @param {URLSearchParams} authParams 
- * @param {string | null} athleteId 
+ *
+ * @param {URLSearchParams} authParams
+ * @param {string | null} athleteId
  * @returns { expires_at, access_token, refresh_token }
  */
 async function getAccessTokenAndSaveIntoCache(authParams, athleteId) {
-  const stravaOauthResponse = await fetch("https://www.strava.com/api/v3/oauth/token", {
-    method: "POST",
-    body: authParams
-  })
+  const stravaOauthResponse = await fetch(
+    'https://www.strava.com/api/v3/oauth/token',
+    {
+      method: 'POST',
+      body: authParams,
+    },
+  )
   /**
    * {
   "token_type": "Bearer",
@@ -199,16 +279,17 @@ async function getAccessTokenAndSaveIntoCache(authParams, athleteId) {
   }
 }
    */
-  const { expires_at, access_token, refresh_token, athlete } = await stravaOauthResponse.json()
+  const { expires_at, access_token, refresh_token, athlete } =
+    await stravaOauthResponse.json()
 
   if (!athleteId) {
     athleteId = athlete.id
   }
-  
+
   const tokenObject = {
     expires_at,
     access_token,
-    refresh_token
+    refresh_token,
   }
 
   await STRAVA_OAUTH.put(`athletes/${athleteId}`, JSON.stringify(tokenObject))
@@ -232,8 +313,12 @@ async function handleRequest(request) {
       return await handleOauthRedirect(request)
     case '/strava/webhook':
       return await handleStravaUpdateWebhook(request)
-    case '/strava/athlete':
-      return await handleStravaAthleteRequest(request)
+    case '/strava/registerWebhook':
+      return await registerWebhookHandler(request)
+    // case '/strava/athlete':
+    //   return await handleStravaAthleteRequest(request)
+    // case '/strava/activity':
+    //   return await handleStravaActivityRequest(request)
     default:
       return handleNotFound()
   }

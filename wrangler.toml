@@ -7,5 +7,5 @@ route = ""
 zone_id = ""
 
 kv_namespaces = [ 
-	 { binding = "STRAVA_OAUTH", id = "a36feb1caf1045579659649a3cce8a3c" }
+	 { binding = "STRAVA_OAUTH", id = "a36feb1caf1045579659649a3cce8a3c", preview_id = "a36feb1caf1045579659649a3cce8a3c" }
 ]
